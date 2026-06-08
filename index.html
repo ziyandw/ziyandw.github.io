@@ -1,0 +1,2022 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>奔跑的大鹅 - Running Goose · 粤韵风华</title>
+<style>
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body {
+        background: #2b1b0e;
+        background-image:
+            radial-gradient(ellipse at 30% 20%, #4a2820 0%, transparent 60%),
+            radial-gradient(ellipse at 70% 80%, #3d1f15 0%, transparent 60%),
+            linear-gradient(180deg, #1a0f08 0%, #2b1b0e 50%, #3d2010 100%);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+        overflow: hidden;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+
+    /* 游戏容器 */
+    .game-wrapper {
+        position: relative;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow:
+            0 0 40px rgba(220, 60, 30, 0.25),
+            0 0 80px rgba(200, 120, 30, 0.12),
+            0 20px 60px rgba(0, 0, 0, 0.6);
+        border: 3px solid #8b3a2a;
+    }
+
+    canvas {
+        display: block;
+        border-radius: 13px;
+    }
+
+    /* 底部提示 */
+    .hint-bar {
+        position: absolute;
+        bottom: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: rgba(255, 220, 180, 0.55);
+        font-size: 13px;
+        letter-spacing: 2px;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    }
+</style>
+</head>
+<body>
+
+<div class="game-wrapper">
+    <canvas id="gameCanvas"></canvas>
+    <div class="hint-bar">空格跳跃 · 方向键移动 · 二段跳</div>
+</div>
+
+<script>
+// ============================================================
+//  奔跑的大鹅 - Running Goose · 粤韵风华
+//  一款带有广东特色的 2D 平面横版跑酷 H5 小游戏
+//  大鹅自主向前行走，速度由慢到快，支持二段跳跃
+//  收集岭南佳果荔枝，躲避障碍物与空隙
+// ============================================================
+
+(function() {
+    "use strict";
+
+    // ---------------------- Canvas 初始化 ----------------------
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const W = 900;
+    const H = 500;
+    canvas.width = W;
+    canvas.height = H;
+
+    // ---------------------- 图片资源加载 ----------------------
+    // 用户提供的大鹅图片（1069×1069）和广东风情背景图（937×624）
+    // 将图片放在与此 HTML 同目录下即可自动加载
+    const gooseImg = new Image();
+    const bgImg = new Image();
+    let gooseImgReady = false;
+    let bgImgReady = false;
+
+    gooseImg.src = 'https://static.tcamp.qq.com/gallery/prod/2026/6/8/2e32aaf9c2216571/4dcb0bf5-43aa-4e1f-bee0-a20f1030d4b9.png';
+    bgImg.src = 'https://static.tcamp.qq.com/gallery/prod/2026/6/8/2e32aaf9c2216571/19da53ce-f32c-47dd-b059-1785d84baf44.png';
+
+    gooseImg.onload = function() {
+        gooseImgReady = true;
+        console.log('🦢 大鹅图片加载成功！');
+    };
+    gooseImg.onerror = function() {
+        console.log('🦢 大鹅图片未找到，使用手绘风格大鹅');
+    };
+
+    bgImg.onload = function() {
+        bgImgReady = true;
+        console.log('🏞️ 广东风情背景图加载成功！');
+    };
+    bgImg.onerror = function() {
+        console.log('🏞️ 背景图未找到，使用程序化背景');
+    };
+
+    // ---------------------- 游戏常量 ----------------------
+    const GRAVITY = 0.5;               // 重力加速度（柔和手感）
+    const JUMP_VELOCITY = -12.5;       // 第一段跳跃初速度（3倍原高度 ≈156px）
+    const JUMP2_VELOCITY = -11.0;      // 第二段跳跃初速度（空中明显上跳，接近一段跳力度）
+    const PLAYER_DEFAULT_X = 180;      // 玩家默认屏幕 X 坐标
+    const PLAYER_MOVE_SPEED = 4.5;     // 玩家左右移动速度
+    const PLAYER_MIN_X = 40;           // 玩家屏幕 X 左边界
+    const PLAYER_MAX_X = 380;          // 玩家屏幕 X 右边界
+    const GROUND_BASE_Y = 395;         // 基准地面 Y 坐标
+    const PLATFORM_HEIGHT = 16;        // 平台厚度
+
+    // 速度曲线参数：由慢到快，前期简单后期难
+    const SPEED_MIN = 2.0;             // 起始速度（慢速入门）
+    const SPEED_MAX = 6.5;             // 极限速度
+    const SPEED_RAMP_SCORE = 900;      // 到达极速所需的分数
+
+    // 轻磕碰 / 保安鹅 系统参数
+    const STUN_DURATION = 50;          // 眩晕持续帧数（≈0.83秒@60fps）
+    const STUN_SPEED_FACTOR = 0.55;    // 眩晕期间速度倍率
+    const SECURITY_NORMAL_DIST = 280;  // 保安鹅正常跟随距离（屏幕像素）
+    const SECURITY_CLOSE_DIST = 40;    // 轻磕碰后保安鹅逼近距离
+    const SECURITY_RECOVERY = 1.2;     // 保安鹅每帧恢复距离
+
+    // ---------------------- 游戏状态 ----------------------
+    const STATE = { IDLE: 'idle', PLAYING: 'playing', GAMEOVER: 'gameover' };
+    let gameState = STATE.IDLE;
+    let score = 0;
+    let frameCount = 0;
+    let scrollSpeed = SPEED_MIN;
+
+    // 相机水平偏移
+    let cameraX = 0;
+
+    // ---------------------- 玩家（大鹅）数据 ----------------------
+    const player = {
+        worldX: 0,
+        worldY: 0,
+        screenX: PLAYER_DEFAULT_X,
+        vy: 0,
+        width: 42,
+        height: 48,
+        isOnGround: false,
+        currentPlatform: null,
+        legPhase: 0,
+        jumpsLeft: 2,          // 剩余跳跃次数（落地后重置为2，支持二段跳）
+        maxJumps: 2,
+        jumpCooldown: 0,       // 跳跃冷却帧数（防止误触连跳）
+        hangTimer: 0,          // 一段跳顶点停滞计时器（0=不在停滞，>0=停滞剩余帧数）
+        stunned: false,        // 是否处于眩晕状态（轻磕碰后）
+        stunTimer: 0,          // 眩晕剩余帧数
+        lycheeCount: 0         // 收集的荔枝数量
+    };
+
+    function getPlayerScreenX() {
+        return player.worldX - cameraX;
+    }
+
+    // ---------------------- 世界元素 ----------------------
+    let platforms = [];        // 平台
+    let obstacles = [];        // 障碍物
+    let collectibles = [];     // 荔枝（可收集物品）
+    let lanterns = [];         // 红灯笼（广东特色装饰）
+    let kapokPetals = [];      // 木棉花瓣（环境粒子）
+    let decorations = [];      // 背景装饰（云朵、远山）
+    let particles = [];        // 粒子效果
+    let nextPlatformGenX = 0;
+
+    // ---------------------- 保安鹅（跟随在后方的第二只鹅）-----------------------
+    const securityGoose = {
+        distance: SECURITY_NORMAL_DIST,  // 当前距主角的屏幕距离（px）
+        targetY: 0,                      // 目标 Y 坐标（平滑跟随主角地面位置）
+        currentY: 0,                     // 当前 Y 坐标
+    };
+    let mistakeState = false;            // 是否处于失误状态
+    let dangerTimer = 0;                // 危险窗口倒计时（帧数），0=不在危险期
+
+    // ---------------------- 输入状态 ----------------------
+    const keys = {};
+    let jumpPressed = false;
+    let startPressed = false;
+
+    // ---------------------- 难度曲线函数 ----------------------
+    function getDifficulty() {
+        // 难度从 0 到 1，随分数平滑增长
+        return Math.min(1, score / SPEED_RAMP_SCORE);
+    }
+
+    function getCurrentSpeed() {
+        const diff = getDifficulty();
+        // 二次曲线：前期增长平缓，后期加速
+        return SPEED_MIN + diff * diff * (SPEED_MAX - SPEED_MIN);
+    }
+
+    function getGapChance() {
+        const diff = getDifficulty();
+        // 空隙出现概率：初期 8%，最高 50%
+        return 0.08 + diff * 0.42;
+    }
+
+    function getGapSize() {
+        const diff = getDifficulty();
+        const minGap = 60 + diff * 45;
+        const maxGap = 130 + diff * 170;
+        return minGap + Math.random() * (maxGap - minGap);
+    }
+
+    // ---------------------- 初始化 ----------------------
+    function initGame() {
+        score = 0;
+        frameCount = 0;
+        scrollSpeed = SPEED_MIN;
+        cameraX = 0;
+        platforms = [];
+        obstacles = [];
+        collectibles = [];
+        lanterns = [];
+        kapokPetals = [];
+        particles = [];
+        decorations = [];
+
+        // 创建初始大平台（宽阔的起始地面，让玩家有充足时间适应）
+        const startPlatform = {
+            worldX: -150,
+            worldY: GROUND_BASE_Y,
+            width: 1000,
+            height: PLATFORM_HEIGHT,
+            hasGrass: true
+        };
+        platforms.push(startPlatform);
+
+        // 玩家初始位置
+        player.worldX = 350;
+        player.worldY = startPlatform.worldY - player.height;
+        player.vy = 0;
+        player.isOnGround = true;
+        player.currentPlatform = startPlatform;
+        player.legPhase = 0;
+        player.screenX = PLAYER_DEFAULT_X;
+        player.jumpsLeft = player.maxJumps;
+        player.jumpCooldown = 0;
+        player.hangTimer = 0;
+        player.lycheeCount = 0;
+        player.stunned = false;
+        player.stunTimer = 0;
+        securityGoose.distance = SECURITY_NORMAL_DIST;
+        securityGoose.currentY = player.worldY;
+        securityGoose.targetY = player.worldY;
+        mistakeState = false;
+        dangerTimer = 0;
+
+        // 设置摄像机
+        cameraX = player.worldX - PLAYER_DEFAULT_X;
+        player.screenX = PLAYER_DEFAULT_X;
+
+        // 下一个平台生成位置
+        nextPlatformGenX = startPlatform.worldX + startPlatform.width;
+
+        // 预生成地形
+        generateWorldAhead();
+
+        // 生成装饰
+        generateDecorations();
+        generateLanterns();
+
+        gameState = STATE.IDLE;
+    }
+
+    // ---------------------- 红灯笼生成 ----------------------
+    function generateLanterns() {
+        lanterns = [];
+        for (let i = 0; i < 10; i++) {
+            lanterns.push({
+                worldX: Math.random() * 3000,
+                worldY: 40 + Math.random() * 120,
+                swayOffset: Math.random() * Math.PI * 2,  // 随机初始相位
+                swaySpeed: 0.015 + Math.random() * 0.025,
+                size: 0.7 + Math.random() * 0.6,
+                parallax: 0.25 + Math.random() * 0.35
+            });
+        }
+    }
+
+    // ---------------------- 背景装饰生成 ----------------------
+    function generateDecorations() {
+        decorations = [];
+        // 云朵
+        for (let i = 0; i < 10; i++) {
+            decorations.push({
+                type: 'cloud',
+                worldX: Math.random() * 3000,
+                worldY: 25 + Math.random() * 140,
+                width: 50 + Math.random() * 100,
+                height: 20 + Math.random() * 40,
+                speed: 0.3 + Math.random() * 0.5
+            });
+        }
+        // 远山（如果没有背景图则使用）
+        for (let i = 0; i < 5; i++) {
+            decorations.push({
+                type: 'hill',
+                worldX: i * 550 + Math.random() * 200,
+                worldY: GROUND_BASE_Y + PLATFORM_HEIGHT,
+                width: 300 + Math.random() * 400,
+                height: 60 + Math.random() * 100,
+                speed: 0.15 + Math.random() * 0.2
+            });
+        }
+    }
+
+    // ---------------------- 平台与障碍物生成（难度递进版）---------------------
+    function generateWorldAhead() {
+        const generateUpTo = cameraX + W + 700;
+        const diff = getDifficulty();
+
+        while (nextPlatformGenX < generateUpTo) {
+            // ---- 决定是否有空隙 ----
+            const hasGap = Math.random() < getGapChance();
+
+            if (hasGap) {
+                const gapSize = getGapSize();
+                nextPlatformGenX += gapSize;
+            } else {
+                // 无空隙：平台紧密衔接或略微错开
+                nextPlatformGenX += Math.random() * 15 - 5; // -5 ~ +10 的小偏移
+            }
+
+            // 平台宽度（随难度递减）
+            const platWidthMin = 110 - diff * 40;
+            const platWidthMax = 340 - diff * 90;
+            const platWidth = platWidthMin + Math.random() * (platWidthMax - platWidthMin);
+
+            // 平台 Y 坐标（高度变化随难度增大，更加明显）
+            const heightVar = 25 + diff * 115;
+            const yOffset = (Math.random() - 0.5) * 2 * heightVar;
+            let platY = GROUND_BASE_Y + yOffset;
+
+            // 绝对边界
+            platY = Math.max(240, Math.min(435, platY));
+
+            // 与上一个平台的高度差限制：确保单段跳跃可达（一段跳 ≈156px，留安全余量）
+            if (platforms.length > 0) {
+                const prevY = platforms[platforms.length - 1].worldY;
+                const maxStep = 130; // 单步最大垂直差，在一段跳范围内
+                if (platY - prevY > maxStep) {
+                    platY = prevY + maxStep;
+                } else if (prevY - platY > maxStep) {
+                    platY = prevY - maxStep;
+                }
+                // 再次确保在绝对边界内
+                platY = Math.max(240, Math.min(435, platY));
+            }
+
+            const platform = {
+                worldX: nextPlatformGenX,
+                worldY: platY,
+                width: platWidth,
+                height: PLATFORM_HEIGHT,
+                hasGrass: true,
+                hasEarWall: diff > 0.15 && Math.random() < 0.2  // 偶尔添加镬耳墙装饰
+            };
+            platforms.push(platform);
+
+            // ---- 随机放置障碍物（概率随难度增加）----
+            const obstacleChance = 0.12 + diff * 0.38;
+            if (Math.random() < obstacleChance && platWidth > 150) {
+                const obsTypes = ['box', 'spike', 'tallBox'];
+                const obsType = obsTypes[Math.floor(Math.random() * obsTypes.length)];
+                let obsWidth, obsHeight;
+                switch (obsType) {
+                    case 'box':
+                        obsWidth = 28; obsHeight = 30; break;
+                    case 'spike':
+                        obsWidth = 26; obsHeight = 32; break;
+                    case 'tallBox':
+                        obsWidth = 24; obsHeight = 48; break;
+                }
+                const obsX = platform.worldX + platWidth * (0.5 + Math.random() * 0.3);
+                obstacles.push({
+                    worldX: obsX,
+                    worldY: platform.worldY - obsHeight,
+                    width: obsWidth,
+                    height: obsHeight,
+                    type: obsType
+                });
+            }
+
+            // ---- 随机放置荔枝（广东特色收集品）----
+            const lycheeChance = 0.2 + diff * 0.15;  // 20%~35% 的平台有荔枝
+            if (Math.random() < lycheeChance && platWidth > 100) {
+                const lycheeX = platform.worldX + 30 + Math.random() * (platWidth - 60);
+                const lycheeY = platform.worldY - 30 - Math.random() * 25;
+                collectibles.push({
+                    worldX: lycheeX,
+                    worldY: lycheeY,
+                    radius: 9,
+                    collected: false,
+                    bobOffset: Math.random() * Math.PI * 2
+                });
+            }
+
+            nextPlatformGenX += platWidth;
+        }
+
+        // 清理屏幕后方元素
+        const cleanThreshold = cameraX - 600;
+        platforms = platforms.filter(p => p.worldX + p.width > cleanThreshold);
+        obstacles = obstacles.filter(o => o.worldX + o.width > cleanThreshold);
+        collectibles = collectibles.filter(c => c.worldX + c.radius > cleanThreshold);
+
+        if (platforms.length === 0) {
+            platforms.push({
+                worldX: cameraX - 100,
+                worldY: GROUND_BASE_Y,
+                width: 500,
+                height: PLATFORM_HEIGHT,
+                hasGrass: true,
+                hasEarWall: false
+            });
+        }
+    }
+
+    // ---------------------- 辅助：矩形碰撞检测 ----------------------
+    function rectsOverlap(a, b) {
+        return (
+            a.x < b.x + b.width &&
+            a.x + a.width > b.x &&
+            a.y < b.y + b.height &&
+            a.y + a.height > b.y
+        );
+    }
+
+    // ---------------------- 粒子效果 ----------------------
+    function spawnDustParticles(x, y, count) {
+        for (let i = 0; i < count; i++) {
+            particles.push({
+                x: x, y: y,
+                vx: (Math.random() - 0.5) * 2,
+                vy: -(Math.random() * 2 + 0.5),
+                life: 15 + Math.random() * 20,
+                maxLife: 35,
+                size: 2 + Math.random() * 3,
+                color: Math.random() < 0.5 ? '#c9b896' : '#d4c5a9'
+            });
+        }
+    }
+
+    function spawnKapokPetal(x, y) {
+        kapokPetals.push({
+            x: x, y: y,
+            vx: -1.5 - Math.random() * 2,
+            vy: -0.5 - Math.random() * 1.5,
+            life: 80 + Math.random() * 120,
+            maxLife: 200,
+            size: 3 + Math.random() * 4,
+            rotation: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 0.04,
+            sway: Math.random() * 0.03,
+            swayPhase: Math.random() * Math.PI * 2
+        });
+    }
+
+    function updateParticles() {
+        for (let p of particles) {
+            p.life--;
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.05;
+        }
+        particles = particles.filter(p => p.life > 0);
+
+        // 更新木棉花瓣
+        for (let p of kapokPetals) {
+            p.life--;
+            p.x += p.vx + Math.sin(p.swayPhase) * 0.3;
+            p.y += p.vy;
+            p.vy += 0.008;  // 花瓣很轻，缓慢下落
+            p.swayPhase += p.sway;
+            p.rotation += p.rotSpeed;
+        }
+        kapokPetals = kapokPetals.filter(p => p.life > 0);
+    }
+
+    // ---------------------- 游戏逻辑更新 ----------------------
+    function update() {
+        if (gameState !== STATE.PLAYING) return;
+
+        frameCount++;
+
+        // ---- 动态速度：随分数从慢到快 ----
+        scrollSpeed = getCurrentSpeed();
+        score = Math.floor(cameraX / 15);
+        const diff = getDifficulty();
+
+        // ---- 相机滚动 + 大鹅自主向前行走（眩晕时减速）----
+        const effectiveSpeed = player.stunned ? scrollSpeed * STUN_SPEED_FACTOR : scrollSpeed;
+        cameraX += effectiveSpeed;
+        player.worldX += effectiveSpeed;
+
+        // ---- 眩晕恢复计时 ----
+        if (player.stunned) {
+            player.stunTimer--;
+            if (player.stunTimer <= 0) {
+                player.stunned = false;
+                player.stunTimer = 0;
+            }
+        }
+
+        // ---- 危险窗口倒计时 ----
+        if (dangerTimer > 0) {
+            dangerTimer--;
+            if (dangerTimer <= 0) {
+                dangerTimer = 0;
+                // 5 秒危险期结束，保安鹅开始撤退
+            }
+        }
+
+        // ---- 保安鹅距离恢复（仅在危险窗口结束后才撤退）----
+        if (!player.stunned && dangerTimer <= 0 && securityGoose.distance < SECURITY_NORMAL_DIST) {
+            securityGoose.distance += SECURITY_RECOVERY;
+            if (securityGoose.distance >= SECURITY_NORMAL_DIST) {
+                securityGoose.distance = SECURITY_NORMAL_DIST;
+                mistakeState = false;  // 失误状态解除
+            }
+        }
+
+        // ---- 减少跳跃冷却 ----
+        if (player.jumpCooldown > 0) player.jumpCooldown--;
+
+        // ---- 玩家输入处理 ----
+        let inputX = 0;
+        if (keys['ArrowLeft'] || keys['KeyA']) inputX = -PLAYER_MOVE_SPEED;
+        if (keys['ArrowRight'] || keys['KeyD']) inputX = PLAYER_MOVE_SPEED;
+        player.worldX += inputX;
+        player.screenX = getPlayerScreenX();
+
+        // 屏幕边界限制
+        if (player.screenX < PLAYER_MIN_X) {
+            player.screenX = PLAYER_MIN_X;
+            player.worldX = cameraX + player.screenX;
+        }
+        if (player.screenX > PLAYER_MAX_X) {
+            player.screenX = PLAYER_MAX_X;
+            player.worldX = cameraX + player.screenX;
+        }
+
+        // ---- 跳跃处理（支持二段跳）----
+        if (jumpPressed && player.jumpCooldown <= 0) {
+            if (player.jumpsLeft > 0) {
+                // 执行跳跃
+                if (player.jumpsLeft === player.maxJumps) {
+                    // 第一段跳：从地面起跳
+                    player.vy = JUMP_VELOCITY;
+                    spawnDustParticles(player.screenX + player.width / 2, player.worldY + player.height, 6);
+                } else {
+                    // 第二段跳：空中二段跳，力度稍弱
+                    player.vy = JUMP2_VELOCITY;
+                    // 二段跳特效（明显的白色冲击圆环 + 粒子）
+                    for (let i = 0; i < 16; i++) {
+                        const angle = (i / 16) * Math.PI * 2;
+                        particles.push({
+                            x: player.screenX + player.width / 2 + Math.cos(angle) * 20,
+                            y: player.worldY + player.height / 2 + Math.sin(angle) * 20,
+                            vx: Math.cos(angle) * 3.5,
+                            vy: Math.sin(angle) * 3.5 - 2,
+                            life: 25, maxLife: 25,
+                            size: 4,
+                            color: '#ffffff'
+                        });
+                    }
+                    // 第二圈彩色粒子
+                    for (let i = 0; i < 10; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        particles.push({
+                            x: player.screenX + player.width / 2,
+                            y: player.worldY + player.height / 2,
+                            vx: Math.cos(angle) * 5,
+                            vy: Math.sin(angle) * 5 - 4,
+                            life: 20, maxLife: 20,
+                            size: 3 + Math.random() * 3,
+                            color: '#ffcc44'
+                        });
+                    }
+                }
+                player.jumpsLeft--;
+                player.isOnGround = false;
+                player.currentPlatform = null;
+                player.jumpCooldown = 8;  // 短暂冷却防止误触
+                jumpPressed = false;
+            }
+        }
+
+        // ---- 重力与垂直运动 ----
+        const prevVy = player.vy;
+        player.vy += GRAVITY;
+
+        // 一段跳顶点停滞：检测速度从负（上升）到非负（下降）的过零点
+        if (player.hangTimer === 0 &&
+            !player.isOnGround &&
+            player.jumpsLeft === 1 &&      // 已使用一段跳，尚未用二段跳
+            prevVy < 0 &&
+            player.vy >= 0) {
+            player.hangTimer = 6;           // 停滞 6 帧 ≈ 0.1 秒
+        }
+
+        // 停滞期间：冻结垂直速度，悬停在顶点
+        if (player.hangTimer > 0) {
+            player.hangTimer--;
+            player.vy = 0;
+        }
+
+        player.worldY += player.vy;
+
+        // ---- 平台碰撞检测 ----
+        player.isOnGround = false;
+        player.currentPlatform = null;
+
+        if (player.vy >= 0) {
+            for (let p of platforms) {
+                const playerBox = {
+                    x: player.worldX + 6,
+                    y: player.worldY,
+                    width: player.width - 12,
+                    height: player.height
+                };
+                const platBox = {
+                    x: p.worldX,
+                    y: p.worldY,
+                    width: p.width,
+                    height: p.height
+                };
+
+                if (playerBox.x < platBox.x + platBox.width &&
+                    playerBox.x + playerBox.width > platBox.x) {
+
+                    const prevFeetY = player.worldY - player.vy + player.height;
+                    const currFeetY = player.worldY + player.height;
+
+                    if (prevFeetY <= platBox.y + 8 && currFeetY >= platBox.y - 3) {
+                        player.worldY = platBox.y - player.height;
+                        player.vy = 0;
+                        player.isOnGround = true;
+                        player.currentPlatform = p;
+                        player.jumpsLeft = player.maxJumps;  // 落地重置跳跃次数
+                        player.jumpCooldown = 0;
+                        player.hangTimer = 0;             // 落地取消顶点停滞
+
+                        if (Math.abs(prevFeetY - platBox.y) > 20) {
+                            spawnDustParticles(player.screenX + player.width / 2, player.worldY + player.height, 3);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // ---- 荔枝收集检测 ----
+        const playerBox = {
+            x: player.worldX + 8,
+            y: player.worldY + 4,
+            width: player.width - 16,
+            height: player.height - 8
+        };
+        for (let c of collectibles) {
+            if (c.collected) continue;
+            // 圆形与矩形碰撞
+            const closestX = Math.max(playerBox.x, Math.min(c.worldX, playerBox.x + playerBox.width));
+            const closestY = Math.max(playerBox.y, Math.min(c.worldY, playerBox.y + playerBox.height));
+            const distX = c.worldX - closestX;
+            const distY = c.worldY - closestY;
+            if (distX * distX + distY * distY < c.radius * c.radius) {
+                c.collected = true;
+                player.lycheeCount++;
+                score += 50;  // 荔枝加分
+                // 收集特效
+                for (let i = 0; i < 8; i++) {
+                    const angle = (i / 8) * Math.PI * 2;
+                    particles.push({
+                        x: c.worldX - cameraX,
+                        y: c.worldY,
+                        vx: Math.cos(angle) * 3,
+                        vy: Math.sin(angle) * 3 - 2,
+                        life: 15, maxLife: 15,
+                        size: 4,
+                        color: '#ff4466'
+                    });
+                }
+            }
+        }
+        // 清理已收集的荔枝
+        collectibles = collectibles.filter(c => !c.collected || c.worldX > cameraX - 100);
+
+        // ---- 障碍物碰撞检测（轻磕碰：眩晕 + 保安逼近，不直接死亡）----
+        for (let obs of obstacles) {
+            const obsBox = {
+                x: obs.worldX + 3,
+                y: obs.worldY + 3,
+                width: obs.width - 6,
+                height: obs.height - 6
+            };
+            if (rectsOverlap(playerBox, obsBox)) {
+                triggerLightHit(obs);
+                break;  // 一帧内只触发一次轻磕碰
+            }
+        }
+
+        // ---- 掉落检测（硬撞击：掉崖直接死亡）----
+        if (player.worldY > H + 120) {
+            gameOver('大鹅失足掉落了！');
+            return;
+        }
+
+        // ---- 持续生成新地形 ----
+        generateWorldAhead();
+
+        // ---- 腿部动画 ----
+        if (player.isOnGround) {
+            player.legPhase += 0.22 + diff * 0.12;  // 速度越快，腿动得越快
+        }
+
+        // ---- 更新粒子 ----
+        updateParticles();
+
+        // ---- 木棉花瓣（环境特效）----
+        if (frameCount % 40 === 0 && Math.random() < 0.6) {
+            spawnKapokPetal(W + 10, 30 + Math.random() * 250);
+        }
+
+        // ---- 补充红灯笼 ----
+        const lastLanternX = lanterns.reduce((max, l) => Math.max(max, l.worldX), cameraX);
+        while (lastLanternX < cameraX + W + 400) {
+            const newX = lastLanternX + 200 + Math.random() * 400;
+            lanterns.push({
+                worldX: newX,
+                worldY: 35 + Math.random() * 100,
+                swayOffset: Math.random() * Math.PI * 2,
+                swaySpeed: 0.015 + Math.random() * 0.025,
+                size: 0.7 + Math.random() * 0.6,
+                parallax: 0.25 + Math.random() * 0.35
+            });
+            break;  // 每次补一盏
+        }
+        lanterns = lanterns.filter(l => l.worldX > cameraX - 200);
+
+        // ---- 补充背景装饰 ----
+        const lastCloudX = decorations
+            .filter(d => d.type === 'cloud')
+            .reduce((max, d) => Math.max(max, d.worldX), cameraX);
+        if (lastCloudX < cameraX + W + 300) {
+            decorations.push({
+                type: 'cloud',
+                worldX: lastCloudX + 150 + Math.random() * 300,
+                worldY: 20 + Math.random() * 140,
+                width: 50 + Math.random() * 90,
+                height: 20 + Math.random() * 35,
+                speed: 0.3 + Math.random() * 0.5
+            });
+        }
+        const cleanDeco = cameraX - 400;
+        decorations = decorations.filter(d => {
+            if (d.type === 'cloud') return d.worldX > cleanDeco - 200;
+            return d.worldX > cleanDeco;
+        });
+    }
+
+    // ---------------------- 轻磕碰（一级伤害）-----------------------
+    function triggerLightHit(obs) {
+        // 如果已经在眩晕中，忽略本次碰撞（有短暂无敌帧）
+        if (player.stunned) return;
+
+        // 如果已在 5 秒危险窗口内 → 再次碰撞直接死亡！
+        if (dangerTimer > 0) {
+            gameOver('保安鹅抓住了大鹅！');
+            return;
+        }
+
+        // 触发眩晕
+        player.stunned = true;
+        player.stunTimer = STUN_DURATION;
+
+        // 保安鹅瞬间逼近，开启 5 秒危险窗口（300帧 ≈ 5秒）
+        securityGoose.distance = SECURITY_CLOSE_DIST;
+        mistakeState = true;
+        dangerTimer = 300;
+
+        // 撞击粒子特效
+        const hitX = player.screenX + player.width / 2;
+        const hitY = player.worldY + player.height / 2;
+        for (let i = 0; i < 15; i++) {
+            particles.push({
+                x: hitX, y: hitY,
+                vx: (Math.random() - 0.5) * 5,
+                vy: (Math.random() - 0.5) * 5 - 2,
+                life: 20 + Math.random() * 15, maxLife: 35,
+                size: 2 + Math.random() * 3,
+                color: '#ffcc00'
+            });
+        }
+        // 红色警告粒子
+        for (let i = 0; i < 8; i++) {
+            particles.push({
+                x: hitX + (Math.random() - 0.5) * 30,
+                y: hitY + (Math.random() - 0.5) * 30,
+                vx: (Math.random() - 0.5) * 2,
+                vy: -(Math.random() * 3 + 1),
+                life: 25 + Math.random() * 20, maxLife: 45,
+                size: 3 + Math.random() * 2,
+                color: '#ff4444'
+            });
+        }
+    }
+
+    // ---------------------- 游戏结束 ----------------------
+    function gameOver(reason) {
+        gameState = STATE.GAMEOVER;
+        // 爆炸粒子
+        for (let i = 0; i < 35; i++) {
+            particles.push({
+                x: player.screenX + player.width / 2,
+                y: player.worldY + player.height / 2,
+                vx: (Math.random() - 0.5) * 7,
+                vy: (Math.random() - 0.5) * 7 - 2,
+                life: 30 + Math.random() * 35,
+                maxLife: 65,
+                size: 2 + Math.random() * 5,
+                color: ['#fff', '#ff8c3d', '#ffcc00', '#ff4466', '#ff6666'][Math.floor(Math.random() * 5)]
+            });
+        }
+        // 木棉花瓣爆散
+        for (let i = 0; i < 12; i++) {
+            spawnKapokPetal(player.screenX + player.width / 2, player.worldY + player.height / 2);
+        }
+        player._deathReason = reason || '游戏结束';
+    }
+
+    // ====================== 绘制函数 ======================
+
+    // 绘制天空渐变背景（无背景图时使用）
+    function drawSky() {
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, '#5a9ec9');
+        grad.addColorStop(0.35, '#8cc8e8');
+        grad.addColorStop(0.7, '#c8e4f0');
+        grad.addColorStop(1, '#d4ecd0');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+    }
+
+    // 绘制广东风情背景图（带视差滚动）
+    function drawBackgroundImage() {
+        if (!bgImgReady) return;
+        // 缩放背景图以覆盖画布高度
+        const scale = H / bgImg.height;
+        const bgW = bgImg.width * scale;
+        const bgH = H;
+        // 视差滚动（背景缓慢移动）
+        const parallaxSpeed = 0.12;
+        const bgX = -(cameraX * parallaxSpeed % bgW);
+
+        // 绘制主背景
+        ctx.drawImage(bgImg, bgX, 0, bgW, bgH);
+        // 如果背景不够覆盖屏幕宽度，补一张
+        if (bgX + bgW < W) {
+            ctx.drawImage(bgImg, bgX + bgW, 0, bgW, bgH);
+        }
+        if (bgX > 0) {
+            ctx.drawImage(bgImg, bgX - bgW, 0, bgW, bgH);
+        }
+    }
+
+    // 绘制远山（无背景图时使用）
+    function drawHills() {
+        if (bgImgReady) return;  // 有背景图则跳过
+        for (let deco of decorations) {
+            if (deco.type !== 'hill') continue;
+            const sx = deco.worldX - cameraX * deco.speed;
+            if (sx + deco.width < -50 || sx > W + 50) continue;
+
+            ctx.fillStyle = '#7ab648';
+            ctx.beginPath();
+            ctx.moveTo(sx, deco.worldY);
+            ctx.quadraticCurveTo(
+                sx + deco.width * 0.4, deco.worldY - deco.height,
+                sx + deco.width * 0.55, deco.worldY - deco.height * 0.9
+            );
+            ctx.quadraticCurveTo(
+                sx + deco.width * 0.7, deco.worldY - deco.height * 0.95,
+                sx + deco.width, deco.worldY
+            );
+            ctx.fill();
+
+            ctx.fillStyle = 'rgba(144, 210, 100, 0.4)';
+            ctx.beginPath();
+            ctx.moveTo(sx + deco.width * 0.15, deco.worldY);
+            ctx.quadraticCurveTo(
+                sx + deco.width * 0.35, deco.worldY - deco.height * 0.6,
+                sx + deco.width * 0.5, deco.worldY - deco.height * 0.55
+            );
+            ctx.quadraticCurveTo(
+                sx + deco.width * 0.65, deco.worldY - deco.height * 0.5,
+                sx + deco.width * 0.85, deco.worldY
+            );
+            ctx.fill();
+        }
+    }
+
+    // 绘制云朵
+    function drawClouds() {
+        if (bgImgReady) return;  // 有背景图则跳过
+        for (let deco of decorations) {
+            if (deco.type !== 'cloud') continue;
+            const sx = deco.worldX - cameraX * deco.speed;
+            if (sx + deco.width < -50 || sx > W + 50) continue;
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+            const cx = sx + deco.width / 2;
+            const cy = deco.worldY + deco.height / 2;
+            const rw = deco.width / 2;
+            const rh = deco.height / 2;
+
+            ctx.beginPath(); ctx.ellipse(cx, cy, rw, rh, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(cx - rw * 0.5, cy + rh * 0.2, rw * 0.55, rh * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(cx + rw * 0.45, cy + rh * 0.1, rw * 0.5, rh * 0.65, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(cx, cy - rh * 0.3, rw * 0.6, rh * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+        }
+    }
+
+    // 绘制红灯笼（广东特色）
+    function drawLanterns() {
+        for (let l of lanterns) {
+            const sx = l.worldX - cameraX * l.parallax;
+            if (sx < -60 || sx > W + 60) continue;
+
+            const sway = Math.sin(frameCount * l.swaySpeed + l.swayOffset) * 5;
+            const tx = sx + sway;
+            const ty = l.worldY;
+            const s = l.size;
+
+            ctx.save();
+            ctx.translate(tx, ty);
+
+            // 吊绳
+            ctx.strokeStyle = '#c8a040';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(0, -20 * s);
+            ctx.lineTo(0, 0);
+            ctx.stroke();
+
+            // 灯笼顶部金色盖
+            ctx.fillStyle = '#d4a840';
+            ctx.fillRect(-5 * s, -2 * s, 10 * s, 4 * s);
+
+            // 灯笼主体（红色椭圆）
+            const grad = ctx.createLinearGradient(-8 * s, 0, 8 * s, 0);
+            grad.addColorStop(0, '#cc3520');
+            grad.addColorStop(0.3, '#e84530');
+            grad.addColorStop(0.5, '#f05038');
+            grad.addColorStop(0.7, '#e84530');
+            grad.addColorStop(1, '#a82518');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.ellipse(0, 7 * s, 8.5 * s, 11 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 灯笼纹理
+            ctx.strokeStyle = 'rgba(180, 100, 20, 0.5)';
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.moveTo(-8 * s, 4 * s);
+            ctx.lineTo(8 * s, 4 * s);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(-7.5 * s, 8 * s);
+            ctx.lineTo(7.5 * s, 8 * s);
+            ctx.stroke();
+
+            // 灯笼底部金色穗子
+            ctx.fillStyle = '#d4a840';
+            ctx.fillRect(-3 * s, 17 * s, 6 * s, 3 * s);
+            ctx.fillStyle = '#e8c850';
+            ctx.beginPath();
+            ctx.moveTo(-2 * s, 20 * s);
+            ctx.lineTo(0, 24 * s);
+            ctx.lineTo(2 * s, 20 * s);
+            ctx.fill();
+
+            // 发光效果
+            ctx.fillStyle = 'rgba(255, 200, 100, 0.08)';
+            ctx.beginPath();
+            ctx.arc(0, 7 * s, 14 * s, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+        }
+    }
+
+    // 绘制镬耳墙（岭南建筑特色装饰）
+    function drawEarWall(platform) {
+        const sx = platform.worldX - cameraX;
+        const sy = platform.worldY;
+        if (sx < -30 || sx > W + 30) return;
+
+        // 镬耳墙——广东传统建筑山墙的曲线造型
+        ctx.fillStyle = '#8b7355';
+        ctx.strokeStyle = '#6b5535';
+        ctx.lineWidth = 2;
+
+        // 左侧镬耳
+        ctx.beginPath();
+        ctx.moveTo(sx + 8, sy);
+        ctx.quadraticCurveTo(sx, sy - 8, sx + 5, sy - 22);
+        ctx.quadraticCurveTo(sx + 12, sy - 26, sx + 18, sy - 18);
+        ctx.quadraticCurveTo(sx + 8, sy - 22, sx + 10, sy);
+        ctx.fill();
+        ctx.stroke();
+
+        // 右侧镬耳
+        const rx = sx + platform.width - 8;
+        ctx.beginPath();
+        ctx.moveTo(rx - 8, sy);
+        ctx.quadraticCurveTo(rx, sy - 8, rx - 5, sy - 22);
+        ctx.quadraticCurveTo(rx - 12, sy - 26, rx - 18, sy - 18);
+        ctx.quadraticCurveTo(rx - 8, sy - 22, rx - 10, sy);
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    // 绘制平台
+    function drawPlatform(p) {
+        const sx = p.worldX - cameraX;
+        const sy = p.worldY;
+        if (sx + p.width < -20 || sx > W + 20) return;
+
+        // 平台主体
+        const bodyGrad = ctx.createLinearGradient(0, sy, 0, sy + p.height + 8);
+        bodyGrad.addColorStop(0, '#c8965c');
+        bodyGrad.addColorStop(0.3, '#b8844a');
+        bodyGrad.addColorStop(1, '#8b6914');
+        ctx.fillStyle = bodyGrad;
+        ctx.fillRect(sx, sy, p.width, p.height + 6);
+
+        // 草皮顶部
+        if (p.hasGrass) {
+            ctx.fillStyle = '#6bbf45';
+            ctx.fillRect(sx, sy - 2, p.width, 6);
+            ctx.fillStyle = '#7cc955';
+            const grassCount = Math.floor(p.width / 12);
+            for (let i = 0; i < grassCount; i++) {
+                const gx = sx + i * 12 + (i % 3) * 3;
+                ctx.beginPath();
+                ctx.moveTo(gx, sy - 2);
+                ctx.lineTo(gx - 3, sy - 7 - (i % 3) * 3);
+                ctx.lineTo(gx + 3, sy - 2);
+                ctx.fill();
+            }
+        }
+
+        // 平台阴影
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+        ctx.fillRect(sx, sy + p.height - 2, p.width, 4);
+
+        // 镬耳墙装饰
+        if (p.hasEarWall) {
+            drawEarWall(p);
+        }
+    }
+
+    // 绘制障碍物
+    function drawObstacle(obs) {
+        const sx = obs.worldX - cameraX;
+        const sy = obs.worldY;
+        if (sx + obs.width < -20 || sx > W + 20) return;
+
+        switch (obs.type) {
+            case 'box':
+                ctx.fillStyle = '#c8874b';
+                ctx.fillRect(sx, sy, obs.width, obs.height);
+                ctx.strokeStyle = '#a06830';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(sx + 2, sy + 2, obs.width - 4, obs.height - 4);
+                ctx.beginPath();
+                ctx.moveTo(sx, sy); ctx.lineTo(sx + obs.width, sy + obs.height);
+                ctx.moveTo(sx + obs.width, sy); ctx.lineTo(sx, sy + obs.height);
+                ctx.stroke();
+                ctx.fillStyle = 'rgba(255,255,255,0.15)';
+                ctx.fillRect(sx, sy, obs.width, obs.height / 3);
+                break;
+
+            case 'spike':
+                ctx.fillStyle = '#999';
+                ctx.beginPath();
+                ctx.moveTo(sx, sy + obs.height);
+                ctx.lineTo(sx + obs.width / 2, sy);
+                ctx.lineTo(sx + obs.width, sy + obs.height);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#666';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                ctx.beginPath();
+                ctx.moveTo(sx + obs.width * 0.3, sy + obs.height);
+                ctx.lineTo(sx + obs.width / 2, sy + obs.height * 0.2);
+                ctx.lineTo(sx + obs.width * 0.5, sy + obs.height);
+                ctx.closePath();
+                ctx.fill();
+                break;
+
+            case 'tallBox':
+                const tbg = ctx.createLinearGradient(sx, 0, sx + obs.width, 0);
+                tbg.addColorStop(0, '#9b7653');
+                tbg.addColorStop(0.5, '#b8946e');
+                tbg.addColorStop(1, '#7d5a3c');
+                ctx.fillStyle = tbg;
+                ctx.fillRect(sx, sy, obs.width, obs.height);
+                ctx.strokeStyle = '#6b4530';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(sx + 2, sy + 2, obs.width - 4, obs.height - 4);
+                ctx.fillStyle = '#888';
+                ctx.fillRect(sx - 1, sy + obs.height * 0.3, obs.width + 2, 3);
+                ctx.fillRect(sx - 1, sy + obs.height * 0.65, obs.width + 2, 3);
+                break;
+        }
+    }
+
+    // 绘制荔枝（广东特色收集品）
+    function drawLychee(c) {
+        if (c.collected) return;
+        const sx = c.worldX - cameraX;
+        const sy = c.worldY;
+        if (sx + c.radius < -10 || sx - c.radius > W + 10) return;
+
+        // 浮动动画
+        const bob = Math.sin(frameCount * 0.06 + c.bobOffset) * 3;
+
+        ctx.save();
+        ctx.translate(sx, sy + bob);
+
+        // 光晕
+        ctx.fillStyle = 'rgba(255, 200, 150, 0.2)';
+        ctx.beginPath();
+        ctx.arc(0, 0, c.radius + 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 荔枝果实（红色渐变）
+        const grad = ctx.createRadialGradient(-2, -2, 1, 0, 0, c.radius);
+        grad.addColorStop(0, '#ff6655');
+        grad.addColorStop(0.6, '#dd3328');
+        grad.addColorStop(1, '#a01518');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, c.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 高光
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.beginPath();
+        ctx.arc(-2, -3, c.radius * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 果梗
+        ctx.strokeStyle = '#5a3a20';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, -c.radius);
+        ctx.quadraticCurveTo(3, -c.radius - 5, 5, -c.radius - 7);
+        ctx.stroke();
+
+        // 小叶片
+        ctx.fillStyle = '#4a8a30';
+        ctx.beginPath();
+        ctx.ellipse(5, -c.radius - 8, 4, 2.5, 0.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    // 绘制木棉花瓣
+    function drawKapokPetals() {
+        for (let p of kapokPetals) {
+            const alpha = p.life / p.maxLife;
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.rotation);
+            ctx.fillStyle = `rgba(230, 60, 40, ${alpha * 0.8})`;
+            ctx.beginPath();
+            ctx.ellipse(0, 0, p.size, p.size * 0.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = `rgba(240, 120, 80, ${alpha * 0.5})`;
+            ctx.beginPath();
+            ctx.ellipse(1, -1, p.size * 0.6, p.size * 0.3, 0.3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    // 眩晕特效（轻磕碰后：头顶星星旋转 + 红色闪烁）
+    function drawStunEffects(centerX, topY) {
+        const alpha = player.stunTimer / STUN_DURATION;
+        const time = frameCount * 0.3;
+
+        // 红色闪烁全身光
+        const flashAlpha = alpha * 0.25 * (0.6 + Math.sin(time * 2.5) * 0.4);
+        ctx.fillStyle = `rgba(255, 40, 30, ${flashAlpha})`;
+        ctx.beginPath();
+        ctx.arc(centerX, topY + player.height / 2, player.width * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 三颗旋转星星
+        for (let i = 0; i < 3; i++) {
+            const angle = time + (i / 3) * Math.PI * 2;
+            const radius = 22 + Math.sin(time * 1.5 + i) * 5;
+            const sx = centerX + Math.cos(angle) * radius;
+            const sy = topY - 10 + Math.sin(angle) * radius * 0.5;
+            const starSize = 5 + alpha * 8;
+
+            // 黄色星星
+            ctx.fillStyle = `rgba(255, 220, 40, ${alpha * 0.9})`;
+            drawStar(sx, sy, starSize, starSize * 0.45, 5);
+        }
+    }
+
+    // 画五角星
+    function drawStar(cx, cy, outerR, innerR, points) {
+        ctx.beginPath();
+        for (let i = 0; i < points * 2; i++) {
+            const r = i % 2 === 0 ? outerR : innerR;
+            const angle = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+            const x = cx + Math.cos(angle) * r;
+            const y = cy + Math.sin(angle) * r;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    // 绘制大鹅（图片版 + 手绘回退）
+    function drawGoose() {
+        const sx = player.screenX;
+        const sy = player.worldY;
+
+        if (gooseImgReady) {
+            // ---- 使用用户提供的大鹅图片 ----
+            const gooseDisplayW = 60;   // 显示宽度
+            const gooseDisplayH = 60;   // 显示高度
+            // 图片居中于碰撞盒
+            const drawX = sx + player.width / 2 - gooseDisplayW / 2;
+            const drawY = sy + player.height - gooseDisplayH + 5;
+
+            ctx.save();
+            // 跳跃时轻微旋转
+            if (!player.isOnGround) {
+                const rot = Math.min(0.25, Math.max(-0.15, player.vy * 0.02));
+                ctx.translate(sx + player.width / 2, sy + player.height / 2);
+                ctx.rotate(rot);
+                ctx.drawImage(gooseImg,
+                    -gooseDisplayW / 2,
+                    -gooseDisplayH / 2 + 5,
+                    gooseDisplayW, gooseDisplayH);
+            } else {
+                ctx.drawImage(gooseImg, drawX, drawY, gooseDisplayW, gooseDisplayH);
+            }
+            ctx.restore();
+
+            // 二段跳就绪提示（小光点）
+            if (player.jumpsLeft > 1 && player.isOnGround) {
+                const alpha = 0.4 + Math.sin(frameCount * 0.1) * 0.2;
+                ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(sx + player.width / 2, sy - 5, 6, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            if (player.jumpsLeft === 1 && !player.isOnGround) {
+                // 空中还有一次跳跃机会的提示
+                const alpha = 0.35 + Math.sin(frameCount * 0.15) * 0.2;
+                ctx.fillStyle = `rgba(180, 220, 255, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(sx + player.width / 2, sy - 5, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // 顶点停滞特效（一段跳最高点悬停波纹）
+            if (player.hangTimer > 0) {
+                const hangAlpha = player.hangTimer / 6;
+                const pulse = 1 + (6 - player.hangTimer) * 0.2;
+                ctx.strokeStyle = `rgba(255, 255, 255, ${hangAlpha * 0.7})`;
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.arc(sx + player.width / 2, sy + player.height / 2,
+                    player.width * 0.55 * pulse, 0, Math.PI * 2);
+                ctx.stroke();
+                // 外圈
+                ctx.strokeStyle = `rgba(255, 255, 255, ${hangAlpha * 0.35})`;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(sx + player.width / 2, sy + player.height / 2,
+                    player.width * 0.75 * pulse, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            // 眩晕特效（轻磕碰后）
+            if (player.stunned) {
+                drawStunEffects(sx + player.width / 2, sy);
+            }
+            return;
+        }
+
+        // ---- 手绘大鹅（图片未加载时的回退方案）----
+        const cx = sx + player.width / 2;
+        const cy = sy + player.height / 2;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        if (!player.isOnGround) {
+            const rot = Math.min(0.3, Math.max(-0.2, player.vy * 0.02));
+            ctx.rotate(rot);
+        }
+
+        const bw = player.width;
+        const bh = player.height;
+
+        // 阴影
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.beginPath();
+        ctx.ellipse(3, bh / 2 + 2, bw * 0.4, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 腿部（动画）
+        const legLen = 14;
+        const legBaseY = bh / 2 - 2;
+        const legSwing = player.isOnGround ? Math.sin(player.legPhase) * 5 : 2;
+        ctx.strokeStyle = '#f08a3d';
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(-bw * 0.25, legBaseY);
+        ctx.lineTo(-bw * 0.25 + legSwing, legBaseY + legLen);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.15, legBaseY);
+        ctx.lineTo(bw * 0.15 - legSwing, legBaseY + legLen);
+        ctx.stroke();
+
+        ctx.fillStyle = '#f08a3d';
+        ctx.beginPath();
+        ctx.ellipse(-bw * 0.25 + legSwing, legBaseY + legLen, 7, 3.5, 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(bw * 0.15 - legSwing, legBaseY + legLen, 7, 3.5, -0.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 身体
+        ctx.fillStyle = '#fafafc';
+        ctx.strokeStyle = '#d0d0d8';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, bw * 0.45, bh * 0.35, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 翅膀
+        ctx.fillStyle = '#eef0f5';
+        ctx.strokeStyle = '#d0d0d8';
+        ctx.lineWidth = 1.5;
+        const wingFlap = player.isOnGround ? Math.sin(player.legPhase * 0.7) * 3 : -3;
+        ctx.beginPath();
+        ctx.ellipse(-bw * 0.05, -bh * 0.05 + wingFlap, bw * 0.3, bh * 0.22, -0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 颈部
+        ctx.strokeStyle = '#fafafc';
+        ctx.lineWidth = 9;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.25, -bh * 0.15);
+        ctx.quadraticCurveTo(bw * 0.45, -bh * 0.6, bw * 0.3, -bh * 0.75);
+        ctx.stroke();
+        ctx.strokeStyle = '#d0d0d8';
+        ctx.lineWidth = 10.5;
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.25, -bh * 0.15);
+        ctx.quadraticCurveTo(bw * 0.45, -bh * 0.6, bw * 0.3, -bh * 0.75);
+        ctx.stroke();
+        ctx.strokeStyle = '#fafafc';
+        ctx.lineWidth = 9;
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.25, -bh * 0.15);
+        ctx.quadraticCurveTo(bw * 0.45, -bh * 0.6, bw * 0.3, -bh * 0.75);
+        ctx.stroke();
+
+        // 头部
+        const headX = bw * 0.28;
+        const headY = -bh * 0.78;
+        ctx.fillStyle = '#fafafc';
+        ctx.strokeStyle = '#d0d0d8';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(headX, headY, 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 眼睛
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.arc(headX + 3, headY - 2, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(headX + 3.5, headY - 3, 1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 喙
+        ctx.fillStyle = '#f08a3d';
+        ctx.strokeStyle = '#d07030';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(headX + 8, headY - 1);
+        ctx.lineTo(headX + 23, headY + 1);
+        ctx.lineTo(headX + 8, headY + 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // 腮红
+        ctx.fillStyle = 'rgba(255, 150, 150, 0.35)';
+        ctx.beginPath();
+        ctx.arc(headX + 5, headY + 3, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+
+        // 二段跳提示
+        if (player.jumpsLeft > 1 && player.isOnGround) {
+            const alpha = 0.4 + Math.sin(frameCount * 0.1) * 0.2;
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(cx, sy - 5, 6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        if (player.jumpsLeft === 1 && !player.isOnGround) {
+            const alpha = 0.35 + Math.sin(frameCount * 0.15) * 0.2;
+            ctx.fillStyle = `rgba(180, 220, 255, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(cx, sy - 5, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 顶点停滞特效（一段跳最高点悬停波纹）
+        if (player.hangTimer > 0) {
+            const hangAlpha = player.hangTimer / 6;
+            const pulse = 1 + (6 - player.hangTimer) * 0.2;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${hangAlpha * 0.7})`;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.arc(cx, cy, player.width * 0.55 * pulse, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.strokeStyle = `rgba(255, 255, 255, ${hangAlpha * 0.35})`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(cx, cy, player.width * 0.75 * pulse, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // 眩晕特效（轻磕碰后）
+        if (player.stunned) {
+            drawStunEffects(cx, sy);
+        }
+    }
+
+    // 绘制保安鹅（跟随在后方的第二只鹅，深色威严造型）
+    function drawSecurityGoose() {
+        if (gameState !== STATE.PLAYING) return;
+
+        const dist = securityGoose.distance;
+        const sx = player.screenX - dist;  // 在主角后方
+        if (sx < -60 || sx > W + 60) return; // 屏幕外不画
+
+        // 保安鹅 Y 坐标平滑跟随主角（地面位置）
+        if (player.isOnGround) {
+            securityGoose.targetY = player.worldY;
+        }
+        securityGoose.currentY += (securityGoose.targetY - securityGoose.currentY) * 0.15;
+
+        const sy = securityGoose.currentY;
+        const cx = sx + player.width / 2;
+        const cy = sy + player.height / 2;
+        const bw = player.width;
+        const bh = player.height;
+
+        // 距离越近，保安鹅颜色越浓（警告感越强）
+        const threatRatio = 1 - (dist - SECURITY_CLOSE_DIST) / (SECURITY_NORMAL_DIST - SECURITY_CLOSE_DIST);
+        const threat = Math.max(0, Math.min(1, threatRatio));
+        const bodyColor = `rgb(${Math.round(180 - threat * 80)}, ${Math.round(170 - threat * 100)}, ${Math.round(160 - threat * 120)})`;
+        const darkColor = `rgb(${Math.round(100 - threat * 50)}, ${Math.round(80 - threat * 70)}, ${Math.round(70 - threat * 90)})`;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // 阴影
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.beginPath();
+        ctx.ellipse(3, bh / 2 + 2, bw * 0.42, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 腿部
+        const legLen = 15;
+        const legBaseY = bh / 2 - 2;
+        const legSwing = Math.sin(frameCount * 0.25) * 4;
+        ctx.strokeStyle = '#c05030';
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(-bw * 0.25, legBaseY);
+        ctx.lineTo(-bw * 0.25 + legSwing, legBaseY + legLen);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.15, legBaseY);
+        ctx.lineTo(bw * 0.15 - legSwing, legBaseY + legLen);
+        ctx.stroke();
+        ctx.fillStyle = '#c05030';
+        ctx.beginPath();
+        ctx.ellipse(-bw * 0.25 + legSwing, legBaseY + legLen, 7, 3.5, 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(bw * 0.15 - legSwing, legBaseY + legLen, 7, 3.5, -0.1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 身体（深灰色，比主角大一圈）
+        ctx.fillStyle = bodyColor;
+        ctx.strokeStyle = darkColor;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, bw * 0.48, bh * 0.37, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 保安臂章（红色）
+        ctx.fillStyle = '#d03030';
+        ctx.fillRect(-bw * 0.12, -bh * 0.12, bw * 0.24, bh * 0.14);
+        ctx.fillStyle = '#ffe040';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('保', 0, -bh * 0.01);
+
+        // 翅膀
+        ctx.fillStyle = darkColor;
+        ctx.strokeStyle = darkColor;
+        ctx.lineWidth = 1.5;
+        const wingFlap = Math.sin(frameCount * 0.25) * 3;
+        ctx.beginPath();
+        ctx.ellipse(-bw * 0.05, -bh * 0.05 + wingFlap, bw * 0.32, bh * 0.24, -0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 颈部（比主角粗短）
+        ctx.strokeStyle = bodyColor;
+        ctx.lineWidth = 10;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.22, -bh * 0.12);
+        ctx.quadraticCurveTo(bw * 0.4, -bh * 0.5, bw * 0.25, -bh * 0.65);
+        ctx.stroke();
+        ctx.strokeStyle = darkColor;
+        ctx.lineWidth = 12;
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.22, -bh * 0.12);
+        ctx.quadraticCurveTo(bw * 0.4, -bh * 0.5, bw * 0.25, -bh * 0.65);
+        ctx.stroke();
+        ctx.strokeStyle = bodyColor;
+        ctx.lineWidth = 10;
+        ctx.beginPath();
+        ctx.moveTo(bw * 0.22, -bh * 0.12);
+        ctx.quadraticCurveTo(bw * 0.4, -bh * 0.5, bw * 0.25, -bh * 0.65);
+        ctx.stroke();
+
+        // 头部（稍大）
+        const headX = bw * 0.24;
+        const headY = -bh * 0.7;
+        ctx.fillStyle = bodyColor;
+        ctx.strokeStyle = darkColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(headX, headY, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 保安帽
+        ctx.fillStyle = '#2a3a50';
+        ctx.beginPath();
+        ctx.arc(headX, headY - 5, 11, Math.PI, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillRect(headX - 11, headY - 5, 22, 5);
+        ctx.fillStyle = '#d03030';
+        ctx.fillRect(headX - 4, headY - 3, 8, 3);
+
+        // 眼睛（凶悍）
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(headX + 3, headY - 1, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.arc(headX + 3.5, headY - 1, 2, 0, Math.PI * 2);
+        ctx.fill();
+        // 粗眉毛
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(headX - 1, headY - 6);
+        ctx.lineTo(headX + 7, headY - 4);
+        ctx.stroke();
+
+        // 喙（深橙色，更粗短）
+        ctx.fillStyle = '#d06830';
+        ctx.strokeStyle = '#a04020';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(headX + 8, headY);
+        ctx.lineTo(headX + 22, headY + 2);
+        ctx.lineTo(headX + 8, headY + 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.restore();
+
+        // 距离警告线（距离越近越明显）
+        if (dist < SECURITY_NORMAL_DIST * 0.6) {
+            const alpha = threat * 0.4;
+            ctx.strokeStyle = `rgba(255, 60, 30, ${alpha})`;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([5, 8]);
+            ctx.beginPath();
+            ctx.moveTo(sx + player.width, sy + player.height / 2);
+            ctx.lineTo(player.screenX, player.worldY + player.height / 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+    }
+
+    // 绘制粒子
+    function drawParticles() {
+        for (let p of particles) {
+            const alpha = p.life / p.maxLife;
+            const hex = p.color;
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // 绘制 UI
+    function drawUI() {
+        // 半透明顶栏（广东红色调）
+        ctx.fillStyle = 'rgba(60, 15, 10, 0.3)';
+        ctx.fillRect(0, 0, W, 44);
+
+        // 分数
+        ctx.fillStyle = '#ffe8d0';
+        ctx.font = 'bold 20px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`🦢 距离: ${score} 米`, 16, 31);
+
+        // 荔枝计数
+        if (player.lycheeCount > 0) {
+            ctx.fillStyle = '#ff8888';
+            ctx.font = 'bold 16px "Microsoft YaHei", "PingFang SC", sans-serif';
+            ctx.fillText(`🍒 ×${player.lycheeCount}`, 200, 31);
+        }
+
+        // 右侧：速度指示
+        ctx.font = '13px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.fillStyle = 'rgba(255, 220, 180, 0.7)';
+        ctx.textAlign = 'right';
+        const speedPercent = Math.round((scrollSpeed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN) * 100);
+        ctx.fillText(`速度 ${speedPercent}%`, W - 16, 28);
+
+        // 失误状态警告（显示危险倒计时）
+        if (mistakeState && gameState === STATE.PLAYING) {
+            const dangerSeconds = Math.ceil(dangerTimer / 60);
+            let warnText, warnColor;
+            if (dangerTimer > 0) {
+                // 危险窗口内：红色闪烁 + 倒计时
+                const warnAlpha = 0.7 + Math.sin(frameCount * 0.2) * 0.3;
+                warnColor = `rgba(255, 50, 30, ${warnAlpha})`;
+                warnText = `⚠ 危险！再撞即死 ${dangerSeconds}秒`;
+            } else {
+                // 安全撤退中
+                const warnAlpha = 0.4 + Math.sin(frameCount * 0.1) * 0.2;
+                warnColor = `rgba(255, 180, 60, ${warnAlpha})`;
+                warnText = '⚠ 保安撤退中...';
+            }
+            ctx.fillStyle = warnColor;
+            ctx.font = 'bold 13px "Microsoft YaHei", "PingFang SC", sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText(warnText, W - 16, 42);
+        }
+
+        // 二段跳状态指示
+        if (gameState === STATE.PLAYING && !mistakeState) {
+            const jumpAlpha = player.jumpsLeft > 1 ? 0.8 : (player.jumpsLeft > 0 ? 0.4 : 0.2);
+            ctx.fillStyle = `rgba(255, 255, 255, ${jumpAlpha})`;
+            ctx.font = '12px "Microsoft YaHei", "PingFang SC", sans-serif';
+            ctx.textAlign = 'right';
+            const jumpText = player.jumpsLeft > 1 ? '🦘🦘 可二段跳' : (player.jumpsLeft > 0 ? '🦘 可再跳' : '');
+            if (jumpText) {
+                ctx.fillText(jumpText, W - 16, 42);
+            }
+        }
+    }
+
+    // 绘制空闲状态
+    function drawIdleScreen() {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.fillRect(0, 0, W, H);
+
+        // 标题背景装饰（岭南窗花纹）
+        ctx.fillStyle = 'rgba(180, 60, 30, 0.15)';
+        ctx.fillRect(W / 2 - 200, H / 2 - 100, 400, 200);
+        ctx.strokeStyle = 'rgba(220, 140, 80, 0.3)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(W / 2 - 200, H / 2 - 100, 400, 200);
+        // 内框
+        ctx.strokeStyle = 'rgba(220, 140, 80, 0.15)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(W / 2 - 190, H / 2 - 90, 380, 180);
+
+        // 标题
+        ctx.fillStyle = '#ffe8d0';
+        ctx.font = 'bold 48px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'rgba(180, 50, 20, 0.5)';
+        ctx.shadowBlur = 15;
+        ctx.fillText('🦢 奔跑的大鹅', W / 2, H / 2 - 40);
+        ctx.shadowBlur = 0;
+
+        // 副标题（粤韵）
+        ctx.font = '18px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.fillStyle = 'rgba(255, 200, 150, 0.8)';
+        ctx.fillText('— 粤韵风华 · Running Goose —', W / 2, H / 2 + 5);
+
+        // 开始提示
+        const alpha = 0.6 + Math.sin(Date.now() / 600) * 0.4;
+        ctx.fillStyle = `rgba(255, 255, 220, ${alpha})`;
+        ctx.font = 'bold 22px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.fillText('按 空格键 开始游戏', W / 2, H / 2 + 55);
+
+        // 操作说明
+        ctx.fillStyle = 'rgba(255, 220, 180, 0.55)';
+        ctx.font = '14px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.fillText('← → 移动 · 空格 跳跃（支持二段跳）', W / 2, H / 2 + 85);
+        ctx.fillText('收集荔枝 🍒 加分 · 躲避障碍与空隙', W / 2, H / 2 + 107);
+    }
+
+    // 绘制游戏结束画面
+    function drawGameOverScreen() {
+        const flashAlpha = 0.25 + Math.sin(Date.now() / 300) * 0.12;
+        ctx.fillStyle = `rgba(150, 25, 20, ${flashAlpha})`;
+        ctx.fillRect(0, 0, W, H);
+
+        // 面板
+        ctx.fillStyle = 'rgba(30, 10, 5, 0.75)';
+        const panelW = 460;
+        const panelH = 260;
+        const panelX = (W - panelW) / 2;
+        const panelY = (H - panelH) / 2 - 20;
+        ctx.beginPath();
+        ctx.roundRect(panelX, panelY, panelW, panelH, 20);
+        ctx.fill();
+
+        // 金色边框（广东特色）
+        ctx.strokeStyle = 'rgba(200, 140, 60, 0.5)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.roundRect(panelX, panelY, panelW, panelH, 20);
+        ctx.stroke();
+
+        // 内框
+        ctx.strokeStyle = 'rgba(200, 140, 60, 0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(panelX + 8, panelY + 8, panelW - 16, panelH - 16, 15);
+        ctx.stroke();
+
+        // 失败图标
+        ctx.font = '52px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('💔', W / 2, panelY + 55);
+
+        // 标题
+        ctx.fillStyle = '#ff6b6b';
+        ctx.font = 'bold 32px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.fillText('游戏结束', W / 2, panelY + 95);
+
+        // 失败原因
+        ctx.fillStyle = '#ffcccc';
+        ctx.font = '17px "Microsoft YaHei", "PingFang SC", sans-serif';
+        const reason = player._deathReason || '游戏结束';
+        ctx.fillText(reason, W / 2, panelY + 125);
+
+        // 分数
+        ctx.fillStyle = '#ffe8d0';
+        ctx.font = 'bold 22px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.fillText(`最终距离: ${score} 米`, W / 2, panelY + 158);
+
+        // 荔枝数
+        if (player.lycheeCount > 0) {
+            ctx.fillStyle = '#ffaaaa';
+            ctx.font = '18px "Microsoft YaHei", "PingFang SC", sans-serif';
+            ctx.fillText(`🍒 收集荔枝: ${player.lycheeCount} 颗  (+${player.lycheeCount * 50}分)`, W / 2, panelY + 185);
+        }
+
+        // 重新开始提示
+        const alpha = 0.6 + Math.sin(Date.now() / 600) * 0.4;
+        ctx.fillStyle = `rgba(255, 220, 180, ${alpha})`;
+        ctx.font = 'bold 18px "Microsoft YaHei", "PingFang SC", sans-serif';
+        const restartY = player.lycheeCount > 0 ? panelY + 218 : panelY + 210;
+        ctx.fillText('按 空格键 重新开始', W / 2, restartY);
+    }
+
+    // ---------------------- 主绘制流程 ----------------------
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+
+        // 1. 天空
+        drawSky();
+
+        // 2. 广东风情背景图（或远山）
+        drawBackgroundImage();
+        drawHills();
+
+        // 3. 红灯笼（背景层）
+        drawLanterns();
+
+        // 4. 平台
+        for (let p of platforms) {
+            drawPlatform(p);
+        }
+
+        // 5. 障碍物
+        for (let obs of obstacles) {
+            drawObstacle(obs);
+        }
+
+        // 6. 荔枝收集品
+        for (let c of collectibles) {
+            drawLychee(c);
+        }
+
+        // 7. 云朵（前景）
+        drawClouds();
+
+        // 8. 木棉花瓣
+        drawKapokPetals();
+
+        // 9. 粒子
+        drawParticles();
+
+        // 10. 保安鹅（在大鹅之前绘制，显示在后方）
+        drawSecurityGoose();
+
+        // 11. 大鹅
+        drawGoose();
+
+        // 12. UI
+        drawUI();
+
+        // 12. 状态覆盖层
+        if (gameState === STATE.IDLE) {
+            drawIdleScreen();
+        } else if (gameState === STATE.GAMEOVER) {
+            drawGameOverScreen();
+        }
+    }
+
+    // ---------------------- 键盘事件 ----------------------
+    window.addEventListener('keydown', function(e) {
+        keys[e.code] = true;
+
+        if (e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') {
+            e.preventDefault();
+            if (gameState === STATE.IDLE) {
+                startGame();
+            } else if (gameState === STATE.PLAYING) {
+                jumpPressed = true;
+            } else if (gameState === STATE.GAMEOVER) {
+                restartGame();
+            }
+        }
+
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code)) {
+            e.preventDefault();
+        }
+    });
+
+    window.addEventListener('keyup', function(e) {
+        keys[e.code] = false;
+        if (e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') {
+            jumpPressed = false;
+        }
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code)) {
+            e.preventDefault();
+        }
+    });
+
+    // ---------------------- 触摸控制 ----------------------
+    let touchLeft = false, touchRight = false, touchJump = false;
+
+    canvas.addEventListener('touchstart', function(e) {
+        e.preventDefault();
+        for (let touch of e.changedTouches) {
+            const rect = canvas.getBoundingClientRect();
+            const cx = (touch.clientX - rect.left) * (W / rect.width);
+            const cy = (touch.clientY - rect.top) * (H / rect.height);
+
+            if (cx < W / 3 && cy > H * 0.5) {
+                touchLeft = true;
+            } else if (cx > W * 2 / 3 && cy > H * 0.5) {
+                touchRight = true;
+            } else {
+                touchJump = true;
+                if (gameState === STATE.IDLE) {
+                    startGame();
+                } else if (gameState === STATE.PLAYING) {
+                    jumpPressed = true;
+                } else if (gameState === STATE.GAMEOVER) {
+                    restartGame();
+                }
+            }
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        touchLeft = false;
+        touchRight = false;
+        touchJump = false;
+        jumpPressed = false;
+    });
+
+    // 合并触摸输入
+    const origUpdate = update;
+    update = function() {
+        if (touchLeft) keys['ArrowLeft'] = true;
+        if (touchRight) keys['ArrowRight'] = true;
+        origUpdate();
+    };
+
+    // ---------------------- 游戏流程 ----------------------
+    function startGame() {
+        initGame();
+        gameState = STATE.PLAYING;
+        jumpPressed = false;
+    }
+
+    function restartGame() {
+        initGame();
+        gameState = STATE.PLAYING;
+        jumpPressed = false;
+    }
+
+    // ---------------------- 主循环 ----------------------
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // ---------------------- 启动 ----------------------
+    function boot() {
+        initGame();
+        gameLoop();
+    }
+
+    // CanvasRenderingContext2D roundRect polyfill
+    if (!ctx.roundRect) {
+        ctx.roundRect = function(x, y, w, h, r) {
+            if (typeof r === 'number') r = { tl: r, tr: r, br: r, bl: r };
+            ctx.beginPath();
+            ctx.moveTo(x + r.tl, y);
+            ctx.lineTo(x + w - r.tr, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+            ctx.lineTo(x + w, y + h - r.br);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+            ctx.lineTo(x + r.bl, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+            ctx.lineTo(x, y + r.tl);
+            ctx.quadraticCurveTo(x, y, x + r.tl, y);
+            ctx.closePath();
+        };
+    }
+
+    boot();
+
+    console.log('🦢 奔跑的大鹅 - Running Goose · 粤韵风华 准备就绪！');
+    console.log('   🍒 收集荔枝加分  🏮 红灯笼高挂  🌺 木棉花飘落');
+    console.log('   按空格键开始，← → 移动，空格二段跳');
+    console.log('   速度由慢到快，坚持越远越好！');
+})();
+</script>
+</body>
+</html>
